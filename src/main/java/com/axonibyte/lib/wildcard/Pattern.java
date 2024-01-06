@@ -30,14 +30,17 @@ import java.util.Objects;
 public final class Pattern {
 
   private char[] strWild = null;
+  private boolean caseSensitive;
   
   /**
    * Instantiates a pattern.
    *
    * @param pattern the pattern to match against candidates
+   * @param caseSensitive {@code true} if matches should be case sensitive
    */
-  public Pattern(String pattern) {
+  public Pattern(String pattern, boolean caseSensitive) {
     Objects.requireNonNull(pattern);
+    this.caseSensitive = caseSensitive;
     this.strWild = chars(pattern);
   }
 
@@ -155,11 +158,17 @@ public final class Pattern {
     } while(true);
   }
 
+  // simulate a C-styled null-terminated character array as best as possible
   private char[] chars(String string) {
     int len = string.length();
     char[] arr = new char[len + 1];
     if(0 < len)
-      System.arraycopy(string.toCharArray(), 0, arr, 0, len);
+      System.arraycopy(
+          (caseSensitive ? string : string.toLowerCase()).toCharArray(),
+          0,
+          arr,
+          0,
+          len);
     arr[len] = '\0';
     return arr;
   }
