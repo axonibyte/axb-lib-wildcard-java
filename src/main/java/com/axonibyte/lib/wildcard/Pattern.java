@@ -29,6 +29,7 @@ import java.util.Objects;
  */
 public final class Pattern {
 
+  private String pattern = null;
   private char[] strWild = null;
   private boolean caseSensitive;
   
@@ -40,6 +41,7 @@ public final class Pattern {
    */
   public Pattern(String pattern, boolean caseSensitive) {
     Objects.requireNonNull(pattern);
+    this.pattern = pattern;
     this.caseSensitive = caseSensitive;
     this.strWild = chars(pattern);
   }
@@ -171,6 +173,13 @@ public final class Pattern {
           len);
     arr[len] = '\0';
     return arr;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override public String toString() {
+    return pattern;
   }
   
 }

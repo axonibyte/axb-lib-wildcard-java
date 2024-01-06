@@ -18,6 +18,11 @@ package com.axonibyte.lib.wildcard;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
+/**
+ * Test class to test the pattern matcher.
+ *
+ * @author Caleb L. Power <cpower@axonibyte.com>
+ */
 public class PatternTest {
 
   String[] patterns = new String[] {
@@ -54,7 +59,11 @@ public class PatternTest {
     "",
     "*"
   };
-  
+
+  /**
+   * Tests the pattern matcher to ensure that it properly matches against
+   * strings without regard to character case.
+   */
   @Test public void testMatches_caseInsensitive() {
     boolean[][] expected = new boolean[][] {
       {  true,  true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false },
@@ -85,6 +94,10 @@ public class PatternTest {
     }
   }
 
+  /**
+   * Tests the pattern matcher to ensure that it properly matches against
+   * strings, with full consideration of character case.
+   */
   @Test public void testMatches_caseSensitive() {
     boolean[][] expected = new boolean[][] {
       {  true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false },
