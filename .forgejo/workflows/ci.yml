@@ -32,11 +32,22 @@
 # rather than a silently different compiler. (JAVA_VERSION=25 does NOT work for
 # openjdk25 -- it is not registered with the wrapper; that one needs JAVA_HOME.)
 #
-# NO PUBLISH STEP YET, deliberately. cal settled the target -- Forgejo, both
-# the Maven package registry and a release asset -- but the runner has no
-# package-registry token, and a publish step that cannot authenticate is a step
-# that reports nothing. The tag-agreement gate below is the half that needs no
-# secret, so it ships now.
+# PUBLISHING IS A JAR UPLOAD, NOT maven-publish. cal 2026-10-20: drop
+# maven-publish, since Bitbucket's paid tier is going away and cal is the only
+# consumer. The jar goes to Forgejo's GENERIC package registry on a tag:
+#     PUT /api/packages/axonibyte/generic/<name>/<version>/<name>-<version>.jar
+# and a consumer reads it back through an IVY repository with an artifact-only
+# layout -- see axb-lib-http-java's build.gradle, where that replaced JitPack.
+# Measured both directions on 2026-10-20: the upload returns 201, an ANONYMOUS
+# GET returns the jar byte-identical, axb-lib-http-java builds green (24 tests)
+# resolving com.axonibyte:axb-lib-wildcard-java:0.0.1 from the forge, and the
+# same build FAILS with "Could not find ... 9.9.9" when the version is absent,
+# which is what proves the resolution is live rather than cached.
+#
+# THE CREDENTIAL IS THE JOB'S OWN TOKEN if it can write packages; the
+# workflow_dispatch-only step below answers that by writing one probe file, so
+# the answer is a measurement in a run log rather than a belief. If it cannot,
+# this switches to a cal-provided secret with package write.
 name: ci
 
 on:
@@ -45,6 +56,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -125,3 +137,60 @@ jobs:
             "v$ver"|"$ver") echo "they agree" ;;
             *) echo "REFUSED: tag $tag does not name version $ver"; exit 1 ;;
           esac
+
+      - name: can this job's own token write a package? (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          # The token reaches curl through a 0600 config file and an env var,
+          # never argv. Two auth forms are tried because which one a job token
+          # may use for the package registry is exactly the open question.
+          printf 'token probe, run %s\n' "${GITHUB_RUN_ID:-?}" > probe.txt
+          base="${GITHUB_SERVER_URL:-https://forge.axonibyte.com}/api/packages/${GITHUB_REPOSITORY_OWNER}/generic/ci-token-probe"
+          cfg=$(mktemp); chmod 600 "$cfg"
+          printf 'header = "Authorization: token %s"\n' "$TOKEN" > "$cfg"
+          h=$(timeout 60 curl --config "$cfg" -s -o h.out -w '%{http_code}' \
+              -X PUT --upload-file probe.txt "$base/hdr-${GITHUB_RUN_ID:-0}/probe.txt")
+          printf 'user = "%s:%s"\n' "${GITHUB_ACTOR}" "$TOKEN" > "$cfg"
+          b=$(timeout 60 curl --config "$cfg" -s -o b.out -w '%{http_code}' \
+              -X PUT --upload-file probe.txt "$base/basic-${GITHUB_RUN_ID:-0}/probe.txt")
+          rm -f "$cfg"
+          echo "Authorization: token  -> $h  $(head -c 120 h.out 2>/dev/null)"
+          echo "basic ${GITHUB_ACTOR}:token -> $b  $(head -c 120 b.out 2>/dev/null)"
+          if [ "$h" = 201 ] || [ "$b" = 201 ]; then
+            echo "VERDICT: the job's own token CAN write packages"
+          else
+            echo "VERDICT: the job's own token CANNOT write packages -- publishing needs a secret"
+          fi
+
+      - name: on a tag, publish the jar to the generic registry
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          cd src
+          ver=$(sed -n 's/^prjVer=//p' gradle.properties | head -1)
+          name=$(sed -n 's/^prjName=//p' gradle.properties | head -1)
+          jar="build/libs/$name-$ver.jar"
+          [ -f "$jar" ] || { echo "no $jar to publish"; exit 1; }
+          url="${GITHUB_SERVER_URL:-https://forge.axonibyte.com}/api/packages/${GITHUB_REPOSITORY_OWNER}/generic/$name/$ver/$name-$ver.jar"
+          cfg=$(mktemp); chmod 600 "$cfg"
+          printf 'header = "Authorization: token %s"\n' "$TOKEN" > "$cfg"
+          rc=0
+          code=$(timeout 120 curl --config "$cfg" -s -o ../put.log -w '%{http_code}' \
+                 -X PUT --upload-file "$jar" "$url") || rc=$?
+          rm -f "$cfg"
+          if [ "$rc" = 124 ]; then echo "the upload did not answer in 120s"; exit 1; fi
+          echo "PUT $name-$ver.jar -> $code"
+          case "$code" in
+            201) : ;;
+            409) echo "REFUSED: $ver is already published, and a published version is immutable"; exit 1 ;;
+            *) echo "upload failed"; head -c 300 ../put.log; exit 1 ;;
+          esac
+          got=$(timeout 60 curl -sS -o ../got.jar -w '%{http_code}' "$url")
+          echo "anonymous read back -> $got, $(wc -c < ../got.jar | tr -d ' ') bytes"
+          cmp -s "$jar" ../got.jar || { echo "the published jar does not match what we built"; exit 1; }
+          echo "published and verified byte-identical: $url"
